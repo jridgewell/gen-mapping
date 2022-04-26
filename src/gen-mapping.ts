@@ -77,6 +77,11 @@ export let decodedMap: (map: GenMapping) => DecodedSourceMap;
 export let encodedMap: (map: GenMapping) => EncodedSourceMap;
 export let allMappings: (map: GenMapping) => Mapping[];
 
+export let PrettyMapping: {
+  (opts?: Options): GenMapping;
+  new (opts?: Options): GenMapping;
+};
+
 /**
  * Provides the state to generate a sourcemap.
  */
@@ -85,6 +90,7 @@ export class GenMapping {
   private _sources = new SetArray();
   private _sourcesContent: (string | null)[] = [];
   private _mappings: SourceMapSegment[][] = [];
+  private _pretty = false;
   declare file: string | null | undefined;
   declare sourceRoot: string | null | undefined;
 
@@ -94,18 +100,27 @@ export class GenMapping {
   }
 
   static {
+    PrettyMapping = function (opts) {
+      const map = new GenMapping(opts);
+      map._pretty = true;
+      return map;
+    } as typeof PrettyMapping;
+
     addSegment = (map, genLine, genColumn, source, sourceLine, sourceColumn, name) => {
       const {
         _mappings: mappings,
         _sources: sources,
         _sourcesContent: sourcesContent,
         _names: names,
+        _pretty: pretty,
       } = map;
 
       const line = getLine(mappings, genLine);
       if (source == null) {
         const seg: SourceMapSegment = [genColumn];
-        const index = getColumnIndex(line, genColumn, seg);
+        const index = getColumnIndex(line, genColumn, seg, pretty);
+
+        if (pretty && skipSourceless(genColumn, line, index)) return;
         return insert(line, index, seg);
       }
 
@@ -118,7 +133,9 @@ export class GenMapping {
         ? [genColumn, sourcesIndex, sourceLine, sourceColumn, put(names, name)]
         : [genColumn, sourcesIndex, sourceLine, sourceColumn];
 
-      const index = getColumnIndex(line, genColumn, seg);
+      const index = getColumnIndex(line, genColumn, seg, pretty);
+      if (pretty && skipSource(seg, line, index)) return;
+
       if (sourcesIndex === sourcesContent.length) sourcesContent[sourcesIndex] = null;
       insert(line, index, seg);
     };
@@ -211,7 +228,12 @@ function getLine(mappings: SourceMapSegment[][], index: number): SourceMapSegmen
   return mappings[index];
 }
 
-function getColumnIndex(line: SourceMapSegment[], column: number, seg: SourceMapSegment): number {
+function getColumnIndex(
+  line: SourceMapSegment[],
+  column: number,
+  seg: SourceMapSegment,
+  pretty: boolean,
+): number {
   let index = line.length;
   for (let i = index - 1; i >= 0; i--, index--) {
     const current = line[i];
@@ -220,7 +242,7 @@ function getColumnIndex(line: SourceMapSegment[], column: number, seg: SourceMap
     if (col < column) break;
 
     const cmp = compare(current, seg);
-    if (cmp === 0) return index;
+    if (cmp === 0) return pretty ? -1 : index;
     if (cmp < 0) break;
   }
   return index;
@@ -254,4 +276,45 @@ function insert<T>(array: T[], index: number, value: T) {
     array[i] = array[i - 1];
   }
   array[index] = value;
+}
+
+function skipSourceless(genColumn: number, line: SourceMapSegment[], index: number): boolean {
+  // Sourceless segments at the beginning of a line are useless.
+  if (index <= 0) return true;
+
+  // If the previous segment is also sourceless, then this segment is uesless.
+  const prev = line[index - 1];
+  if (prev.length === 1) return true;
+
+  // If the previous segment starts at the same column, then we we're useless.
+  // Due to sorting, it's impossible for a source segment to be previous to us. And a sourceless
+  // segment would have been captured above.
+  // if (prev[0] === genColumn) return true;
+
+  // If we need to insert this segment at the end of the line, then we should keep it.
+  if (index === line.length) return false;
+
+  // If the next segment is also sourceless, then we can adjust it to start at our column.
+  const next = line[index];
+  if (next.length === 1) {
+    next[0] = genColumn;
+    return true;
+  }
+
+  // If the next segment starts at the same column, then we we're useless.
+  if (next[0] === genColumn) return true;
+
+  return false;
+}
+
+function skipSource(
+  seg: Exclude<SourceMapSegment, [number]>,
+  line: SourceMapSegment[],
+  index: number,
+): boolean {
+  if (index > 0) {
+    const prev = line[index - 1];
+
+  }
+  return false;
 }

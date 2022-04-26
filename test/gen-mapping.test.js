@@ -432,3 +432,116 @@ describe('GenMapping', () => {
     });
   });
 });
+
+describe('PrettyMapping', () => {
+  describe('addSegment', () => {
+    describe('sourceless segment added afterwards', () => {
+      it('skips equivalent sourceless segment', () => {
+        const map = new PrettyMapping();
+
+        addSegment(map, 0, 0, 'input.js', 0, 0);
+        addSegment(map, 0, 1);
+        addSegment(map, 0, 1);
+
+        assert.deepEqual(decodedMap(map).mappings, [[[0, 0, 0, 0], [1]]]);
+      });
+
+      it('skips sourceless segment matching a source segment', () => {
+        const map = new PrettyMapping();
+
+        addSegment(map, 0, 0, 'input.js', 0, 0);
+        addSegment(map, 0, 1, 'input.js', 0, 0);
+        addSegment(map, 0, 1);
+
+        assert.deepEqual(decodedMap(map).mappings, [
+          [
+            [0, 0, 0, 0],
+            [1, 0, 0, 0],
+          ],
+        ]);
+      });
+
+      it('skips sourceless segment sorted first in line', () => {
+        const map = new PrettyMapping();
+
+        addSegment(map, 0, 1, 'input.js', 0, 0);
+        addSegment(map, 0, 1);
+
+        assert.deepEqual(decodedMap(map).mappings, [[[1, 0, 0, 0]]]);
+      });
+
+      it('skips runs of sourceless segment', () => {
+        const map = new PrettyMapping();
+
+        addSegment(map, 0, 0, 'input.js', 0, 0);
+        addSegment(map, 0, 1);
+        addSegment(map, 0, 2);
+
+        assert.deepEqual(decodedMap(map).mappings, [[[0, 0, 0, 0], [1]]]);
+      });
+
+      it('adjusts previous sourceless segment to new genColumn', () => {
+        const map = new PrettyMapping();
+
+        addSegment(map, 0, 0, 'input.js', 0, 0);
+        addSegment(map, 0, 2);
+        addSegment(map, 0, 1);
+
+        assert.deepEqual(decodedMap(map).mappings, [[[0, 0, 0, 0], [1]]]);
+      });
+    });
+
+    describe('source segment added afterwards', () => {
+      it('skips equivalent source segment', () => {
+        const map = new PrettyMapping();
+
+        addSegment(map, 0, 0, 'input.js', 0, 0);
+        addSegment(map, 0, 0, 'input.js', 0, 0);
+
+        assert.deepEqual(decodedMap(map).mappings, [[[0, 0, 0, 0]]]);
+      });
+
+      it('keeps matching named segment', () => {
+        const map = new PrettyMapping();
+
+        addSegment(map, 0, 0, 'input.js', 0, 0, 'foo');
+        addSegment(map, 0, 0, 'input.js', 0, 0);
+
+        assert.deepEqual(decodedMap(map).mappings, [[[0, 0, 0, 0, 0]]]);
+      });
+
+      it('removes sourceless segment matching source segment', () => {
+        const map = new PrettyMapping();
+
+        addSegment(map, 0, 0, 'input.js', 0, 0);
+        addSegment(map, 0, 1);
+        addSegment(map, 0, 1, 'input.js', 0, 0);
+
+        assert.deepEqual(decodedMap(map).mappings, [
+          [
+            [0, 0, 0, 0],
+            [1, 0, 0, 0],
+          ],
+        ]);
+      });
+
+      it('skips runs of source segment', () => {
+        const map = new PrettyMapping();
+
+        addSegment(map, 0, 0, 'input.js', 0, 0);
+        addSegment(map, 0, 1, 'input.js', 0, 0);
+
+        assert.deepEqual(decodedMap(map).mappings, [[[0, 0, 0, 0], ]]);
+      });
+
+      it('adjusts previous sourceless segment to new genColumn', () => {
+        const map = new PrettyMapping();
+
+        addSegment(map, 0, 1, 'input.js', 0, 0);
+        addSegment(map, 0, 0, 'input.js', 0, 0);
+
+        assert.deepEqual(decodedMap(map).mappings, [[[0, 0, 0, 0]]]);
+      });
+    });
+  });
+});
