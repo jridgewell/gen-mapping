@@ -22,6 +22,9 @@ export type Options = {
 };
 
 const NO_NAME = -1;
+const SKIP = 1;
+const OVERWRITE = -1;
+const KEEP = 0;
 
 /**
  * A low-level API to associate a generated position with an original source position. Line and
@@ -324,17 +327,29 @@ export class GenMapping {
       const namesIndex = name ? put(names, name) : NO_NAME;
       if (sourcesIndex === sourcesContent.length) sourcesContent[sourcesIndex] = content ?? null;
 
-      if (skipable && skipSource(line, index, sourcesIndex, sourceLine, sourceColumn, namesIndex)) {
+      let skip = KEEP;
+      if (skipable) {
+        skip = skipSource(
+          line,
+          index,
+          genColumn,
+          sourcesIndex,
+          sourceLine,
+          sourceColumn,
+          namesIndex,
+        );
+        if (skip === SKIP) return;
+      }
+
+      const seg: SourceMapSegment = name
+        ? [genColumn, sourcesIndex, sourceLine, sourceColumn, namesIndex]
+        : [genColumn, sourcesIndex, sourceLine, sourceColumn];
+      if (skip === OVERWRITE) {
+        line[index - 1] = seg;
         return;
       }
 
-      return insert(
-        line,
-        index,
-        name
-          ? [genColumn, sourcesIndex, sourceLine, sourceColumn, namesIndex]
-          : [genColumn, sourcesIndex, sourceLine, sourceColumn],
-      );
+      return insert(line, index, seg);
     };
   }
 }
@@ -394,27 +409,37 @@ function skipSourceless(line: SourceMapSegment[], index: number): boolean {
 function skipSource(
   line: SourceMapSegment[],
   index: number,
+  genColumn: number,
   sourcesIndex: number,
   sourceLine: number,
   sourceColumn: number,
   namesIndex: number,
-): boolean {
+): typeof OVERWRITE | typeof KEEP | typeof SKIP {
   // A source/named segment at the start of a line gives position at that genColumn
-  if (index === 0) return false;
+  if (index === 0) return KEEP;
 
   const prev = line[index - 1];
 
-  // If the previous segment is sourceless, then we're transitioning to a source.
-  if (prev.length === 1) return false;
+  if (genColumn === prev[COLUMN]) {
+    if (prev.length === 1) return OVERWRITE;
+    if (prev.length === 4 && namesIndex !== NO_NAME) return OVERWRITE;
+    return SKIP;
+  }
 
-  // If the previous segment maps to the exact same source position, then this segment doesn't
-  // provide any new position information.
-  return (
-    sourcesIndex === prev[SOURCES_INDEX] &&
-    sourceLine === prev[SOURCE_LINE] &&
-    sourceColumn === prev[SOURCE_COLUMN] &&
-    namesIndex === (prev.length === 5 ? prev[NAMES_INDEX] : NO_NAME)
-  );
+  // genColumnl doesn't match up.
+  if (
+    sourcesIndex !== prev[SOURCES_INDEX] ||
+    sourceLine !== prev[SOURCE_LINE] ||
+    sourceColumn !== prev[SOURCE_COLUMN]
+  ) {
+    return KEEP;
+  }
+
+  // genColumn doesn't match, but source loc does.
+  if (namesIndex !== (prev.length === 5 ? prev[NAMES_INDEX] : NO_NAME)) {
+    return KEEP;
+  }
+  return SKIP;
 }
 
 function addMappingInternal<S extends string | null | undefined>(
