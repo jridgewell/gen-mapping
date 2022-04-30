@@ -401,7 +401,7 @@ function skipSourceless(line: SourceMapSegment[], index: number): boolean {
 
   const prev = line[index - 1];
   // If the previous segment is also sourceless, then adding another sourceless segment doesn't
-  // genrate any new information. Else, this segment will end the source/named segment and point to
+  // generate any new information. Else, this segment will end the source/named segment and point to
   // a sourceless position, which is useful.
   return prev.length === 1;
 }
@@ -420,26 +420,41 @@ function skipSource(
 
   const prev = line[index - 1];
 
+  // If we're at the same column, we either want to overwrite the previous segment or skip this
+  // segment.
   if (genColumn === prev[COLUMN]) {
+    // We know this segment has source, so this carries more information than a sourceless segment
+    // and should overwrite.
     if (prev.length === 1) return OVERWRITE;
+    // If this previous segment is only a source segment and this is a named segment, then we carry
+    // more information and should overwrite.
     if (prev.length === 4 && namesIndex !== NO_NAME) return OVERWRITE;
+    // This is either a source segment and previous was a source segment, this is a source segment
+    // and previous was a named segment, or both are named segment.
     return SKIP;
   }
 
-  // genColumnl doesn't match up.
   if (
     sourcesIndex !== prev[SOURCES_INDEX] ||
     sourceLine !== prev[SOURCE_LINE] ||
     sourceColumn !== prev[SOURCE_COLUMN]
   ) {
+    // We're not at the same column, and we're pointing to a new source position. This is new
+    // information that stops the previous segment's range.
     return KEEP;
   }
 
-  // genColumn doesn't match, but source loc does.
-  if (namesIndex !== (prev.length === 5 ? prev[NAMES_INDEX] : NO_NAME)) {
-    return KEEP;
+  if (namesIndex === (prev.length === 4 ? NO_NAME : prev[NAMES_INDEX])) {
+    // We're not the same column, but the source position does match. If the previous is a source
+    // segment and this is a source segment, or the previous is a named segment and this is a named
+    // segment with the same name, then this doesn't add any information.
+    return SKIP;
   }
-  return SKIP;
+
+  // We're not at the same column, we're pointing at the same position, but the names don't match.
+  // This is new information that stops the previous segment's range, and starts a new range either
+  // without the previous segment's name or sets this segment's name.
+  return KEEP;
 }
 
 function addMappingInternal<S extends string | null | undefined>(
