@@ -646,6 +646,33 @@ describe('GenMapping', () => {
     });
 
     describe('source segment added afterwards', () => {
+      it('keeps source segment at different column with different source', () => {
+        const map = new GenMapping();
+
+        maybeAddSegment(map, 0, 0, 'input.js', 0, 0);
+        maybeAddSegment(map, 0, 1, 'foo.js', 0, 0);
+
+        assert.deepEqual(toDecodedMap(map).mappings, [[[0, 0, 0, 0], [1, 1, 0, 0]]]);
+      });
+
+      it('keeps source segment at different column with different source line', () => {
+        const map = new GenMapping();
+
+        maybeAddSegment(map, 0, 0, 'input.js', 0, 0);
+        maybeAddSegment(map, 0, 1, 'input.js', 1, 0);
+
+        assert.deepEqual(toDecodedMap(map).mappings, [[[0, 0, 0, 0], [1, 0, 1, 0]]]);
+      });
+
+      it('keeps source segment at different column with different source column', () => {
+        const map = new GenMapping();
+
+        maybeAddSegment(map, 0, 0, 'input.js', 0, 0);
+        maybeAddSegment(map, 0, 1, 'input.js', 0, 1);
+
+        assert.deepEqual(toDecodedMap(map).mappings, [[[0, 0, 0, 0], [1, 0, 0, 1]]]);
+      });
+
       it('skips equivalent source segment', () => {
         const map = new GenMapping();
 
