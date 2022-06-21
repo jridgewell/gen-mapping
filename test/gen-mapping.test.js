@@ -9,7 +9,11 @@ const {
   fromMap,
   maybeAddSegment,
   maybeAddMapping,
+  applySourceMap,
 } = require('..');
+
+const { TraceMap } = require('@jridgewell/trace-mapping');
+
 const assert = require('assert');
 
 describe('GenMapping', () => {
@@ -842,6 +846,310 @@ describe('GenMapping', () => {
 
         assert.deepEqual(toDecodedMap(map).mappings, [[[0, 0, 0, 0]]]);
       });
+    });
+  });
+});
+
+/**
+ *
+ * @param {*} assert
+ * @param {import('@jridgewell/trace-mapping').EncodedSourceMap} actualMap
+ * @param {import('@jridgewell/trace-mapping').EncodedSourceMap} expectedMap
+ */
+function assertEqualMaps(assert, actualMap, expectedMap) {
+  assert.equal(actualMap.version, expectedMap.version, 'version mismatch');
+  assert.equal(actualMap.file, expectedMap.file, 'file mismatch');
+  assert.deepEqual(actualMap.names, expectedMap.names, 'names mismatch');
+  assert.deepEqual(actualMap.sources, expectedMap.sources, 'sources mismatch');
+
+  const aSourceRoot = actualMap.sourceRoot;
+  const eSourceRoot = expectedMap.sourceRoot;
+  assert.equal(
+    aSourceRoot,
+    eSourceRoot,
+    `sourceRoot mismatch: '${aSourceRoot}' != '${eSourceRoot}'`
+  );
+  assert.equal(actualMap.mappings, expectedMap.mappings, `mappings mismatch`);
+
+  if (actualMap.sourcesContent) {
+    // The actualMap.sourcesContent could be an array of null,
+    // Which is actually equivalent to not having the key at all
+    const hasValues = actualMap.sourcesContent.filter((c) => c != null).length > 0;
+
+    if (hasValues || expectedMap.sourcesContent) {
+      assert.deepEqual(
+        actualMap.sourcesContent,
+        expectedMap.sourcesContent,
+        'sourcesContent mismatch'
+      );
+    }
+  }
+}
+
+describe('applySourceMap', () => {
+  it('test applySourceMap basic', () => {
+    var mapStep1 = /** @type {import('@jridgewell/trace-mapping').EncodedSourceMap} */ {
+      version: 3,
+      sources: ['fileX', 'fileY'],
+      names: [],
+      mappings: 'AACA;;ACAA;;ADDA;;ACAA',
+      file: 'fileA',
+      sourcesContent: ['lineX1\nlineX2\n', null],
+    };
+
+    var mapStep2 = /** @type {import('@jridgewell/trace-mapping').EncodedSourceMap} */ {
+      version: 3,
+      sources: ['fileA', 'fileB'],
+      names: [],
+      mappings: ';AAAA;AACA;AACA;AACA;ACHA;AACA',
+      file: 'fileGen',
+      sourcesContent: [null, 'lineB1\nlineB2\n'],
+    };
+
+    var expectedMap = /** @type {import('@jridgewell/trace-mapping').EncodedSourceMap} */ {
+      version: 3,
+      sources: ['fileX', 'fileA', 'fileY', 'fileB'],
+      names: [],
+      mappings: ';AACA;ACAA;ACAA;ADEA;AEHA;AACA',
+      file: 'fileGen',
+      sourcesContent: ['lineX1\nlineX2\n', null, null, 'lineB1\nlineB2\n'],
+    };
+
+    // apply source map "mapStep1" to "mapStep2"
+    var generator = fromMap(mapStep2);
+    applySourceMap(generator, new TraceMap(mapStep1));
+    var actualMap = toEncodedMap(generator);
+
+    assertEqualMaps(assert, actualMap, expectedMap);
+  });
+
+  it('test applySourceMap throws when file is missing', () => {
+    var map = new GenMapping({
+      file: 'test.js',
+    });
+    var map2 = toEncodedMap(new GenMapping());
+    assert.throws(function () {
+      applySourceMap(map, new TraceMap(map2));
+    });
+  });
+
+  const data = [
+    [
+      'relative',
+      '../temp/temp_maps',
+      ['coffee/foo.coffee', '/bar.coffee', 'http://www.example.com/baz.coffee'],
+    ],
+    [
+      'absolute',
+      '/app/temp/temp_maps',
+      ['/app/coffee/foo.coffee', '/bar.coffee', 'http://www.example.com/baz.coffee'],
+    ],
+    [
+      'url',
+      'http://foo.org/app/temp/temp_maps',
+      [
+        'http://foo.org/app/coffee/foo.coffee',
+        'http://foo.org/bar.coffee',
+        'http://www.example.com/baz.coffee',
+      ],
+    ],
+    // If the third parameter is omitted or set to the current working
+    // directory we get incorrect source paths:
+    [
+      'undefined',
+      undefined,
+      ['../coffee/foo.coffee', '/bar.coffee', 'http://www.example.com/baz.coffee'],
+    ],
+    [
+      'empty string',
+      '',
+      ['../coffee/foo.coffee', '/bar.coffee', 'http://www.example.com/baz.coffee'],
+    ],
+    ['dot', '.', ['../coffee/foo.coffee', '/bar.coffee', 'http://www.example.com/baz.coffee']],
+    [
+      'dot slash',
+      './',
+      ['../coffee/foo.coffee', '/bar.coffee', 'http://www.example.com/baz.coffee'],
+    ],
+  ];
+
+  data.forEach(([title, actualPath, expected]) => {
+    it(`test the two additional parameters of applySourceMap: ${title}`, () => {
+      // Assume the following directory structure:
+      //
+      // http://foo.org/
+      //   bar.coffee
+      //   app/
+      //     coffee/
+      //       foo.coffee
+      //     temp/
+      //       bundle.js
+      //       temp_maps/
+      //         bundle.js.map
+      //     public/
+      //       bundle.min.js
+      //       bundle.min.js.map
+      //
+      // http://www.example.com/
+      //   baz.coffee
+
+      const bundleMapSource = new GenMapping({
+        file: 'bundle.js',
+      });
+      addMapping(bundleMapSource, {
+        generated: { line: 3, column: 3 },
+        original: { line: 2, column: 2 },
+        source: '../../coffee/foo.coffee',
+      });
+      setSourceContent(bundleMapSource, '../../coffee/foo.coffee', 'foo coffee');
+      addMapping(bundleMapSource, {
+        generated: { line: 13, column: 13 },
+        original: { line: 12, column: 12 },
+        source: '/bar.coffee',
+      });
+      setSourceContent(bundleMapSource, '/bar.coffee', 'bar coffee');
+      addMapping(bundleMapSource, {
+        generated: { line: 23, column: 23 },
+        original: { line: 22, column: 22 },
+        source: 'http://www.example.com/baz.coffee',
+      });
+      setSourceContent(bundleMapSource, 'http://www.example.com/baz.coffee', 'baz coffee');
+
+      const bundleMap = new TraceMap(toEncodedMap(bundleMapSource));
+
+      const minifiedMapSource = new GenMapping({
+        file: 'bundle.min.js',
+        sourceRoot: '..',
+      });
+      addMapping(minifiedMapSource, {
+        generated: { line: 1, column: 1 },
+        original: { line: 3, column: 3 },
+        source: 'temp/bundle.js',
+      });
+      addMapping(minifiedMapSource, {
+        generated: { line: 11, column: 11 },
+        original: { line: 13, column: 13 },
+        source: 'temp/bundle.js',
+      });
+      addMapping(minifiedMapSource, {
+        generated: { line: 21, column: 21 },
+        original: { line: 23, column: 23 },
+        source: 'temp/bundle.js',
+      });
+      const minifiedMap = new TraceMap(toEncodedMap(minifiedMapSource));
+
+      /**
+       *
+       * @param {[string, string, string]} sources
+       * @returns
+       */
+      var expectedMap = function (sources) {
+        var map = new GenMapping({
+          file: 'bundle.min.js',
+          sourceRoot: '..',
+        });
+        addMapping(map, {
+          generated: { line: 1, column: 1 },
+          original: { line: 2, column: 2 },
+          source: sources[0],
+        });
+        setSourceContent(map, sources[0], 'foo coffee');
+        addMapping(map, {
+          generated: { line: 11, column: 11 },
+          original: { line: 12, column: 12 },
+          source: sources[1],
+        });
+        setSourceContent(map, sources[1], 'bar coffee');
+        addMapping(map, {
+          generated: { line: 21, column: 21 },
+          original: { line: 22, column: 22 },
+          source: sources[2],
+        });
+        setSourceContent(map, sources[2], 'baz coffee');
+        return toEncodedMap(map);
+      };
+
+      /**
+       *
+       * @param {string} aSourceMapPath
+       * @returns {import('@jridgewell/trace-mapping').EncodedSourceMap}
+       */
+      var actualMap = function (aSourceMapPath) {
+        var map = fromMap(minifiedMap);
+        // Note that relying on `bundleMap.file` (which is simply 'bundle.js')
+        // instead of supplying the second parameter wouldn't work here.
+        applySourceMap(map, bundleMap, '../temp/bundle.js', aSourceMapPath);
+        return toEncodedMap(map);
+      };
+
+      assertEqualMaps(assert, actualMap(actualPath), expectedMap(expected));
+    });
+  });
+
+  const names = [
+    // `foo = 1` -> `var foo = 1;` -> `var a=1`
+    // CoffeeScript doesn’t rename variables, so there’s no need for it to
+    // provide names in its source maps. Minifiers do rename variables and
+    // therefore do provide names in their source maps. So that name should be
+    // retained if the original map lacks names.
+    [null, 'foo', 'foo'],
+
+    // `foo = 1` -> `var coffee$foo = 1;` -> `var a=1`
+    // Imagine that CoffeeScript prefixed all variables with `coffee$`. Even
+    // though the minifier then also provides a name, the original name is
+    // what corresponds to the source.
+    ['foo', 'coffee$foo', 'foo'],
+
+    // `foo = 1` -> `var coffee$foo = 1;` -> `var coffee$foo=1`
+    // Minifiers can turn off variable mangling. Then there’s no need to
+    // provide names in the source map, but the names from the original map are
+    // still needed.
+    ['foo', null, 'foo'],
+
+    // `foo = 1` -> `var foo = 1;` -> `var foo=1`
+    // No renaming at all.
+    [null, null, null],
+  ];
+
+  /**
+   * Imagine some CoffeeScript code being compiled into JavaScript and then minified.
+   * @param {string | null} coffeeName
+   * @param {string | null} jsName
+   * @param {string | null} expectedName
+   */
+  names.forEach(([coffeeName, jsName, expectedName]) => {
+    it(`test applySourceMap name handling: ${coffeeName || 'null'}, ${jsName || 'null'}, ${
+      expectedName || 'null'
+    }`, () => {
+      var minifiedMap = new GenMapping({
+        file: 'test.js.min',
+      });
+      addMapping(minifiedMap, {
+        generated: { line: 1, column: 4 },
+        original: { line: 1, column: 4 },
+        source: 'test.js',
+        name: jsName,
+      });
+
+      var coffeeMap = new GenMapping({
+        file: 'test.js',
+      });
+      addMapping(coffeeMap, {
+        generated: { line: 1, column: 4 },
+        original: { line: 1, column: 0 },
+        source: 'test.coffee',
+        name: coffeeName,
+      });
+
+      applySourceMap(minifiedMap, new TraceMap(toDecodedMap(coffeeMap)));
+
+      const actualNames = toDecodedMap(minifiedMap).names;
+      if (expectedName == null) {
+        assert.equal(actualNames.length, 0);
+      } else {
+        assert.equal(actualNames.length, 1);
+        assert.deepEqual(actualNames, [expectedName]);
+      }
     });
   });
 });

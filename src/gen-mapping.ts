@@ -1,6 +1,6 @@
-import { SetArray, put } from '@jridgewell/set-array';
+import { SetArray, put, get } from '@jridgewell/set-array';
 import { encode } from '@jridgewell/sourcemap-codec';
-import { TraceMap, decodedMappings } from '@jridgewell/trace-mapping';
+import { TraceMap, decodedMappings, traceSegment } from '@jridgewell/trace-mapping';
 
 import {
   COLUMN,
@@ -9,6 +9,8 @@ import {
   SOURCE_COLUMN,
   NAMES_INDEX,
 } from './sourcemap-segment';
+
+import { join, relative } from './util';
 
 import type { SourceMapInput } from '@jridgewell/trace-mapping';
 import type { SourceMapSegment } from './sourcemap-segment';
@@ -138,6 +140,18 @@ export let fromMap: (input: SourceMapInput) => GenMapping;
  * passed to the `source-map` library.
  */
 export let allMappings: (map: GenMapping) => Mapping[];
+
+/**
+ * Applies the mappings of a sub-source-map for a specific source file to the
+ * source map being generated. Each mapping to the supplied source file is
+ * rewritten using the supplied source map.
+ */
+export let applySourceMap: (
+  map: GenMapping,
+  sourceMapConsumer: TraceMap,
+  sourceFile?: string,
+  sourceMapPath?: string,
+) => void;
 
 // This split declaration is only so that terser can elminiate the static initialization block.
 let addSegmentInternal: <S extends string | null | undefined>(
@@ -335,6 +349,98 @@ export class GenMapping {
           ? [genColumn, sourcesIndex, sourceLine, sourceColumn, namesIndex]
           : [genColumn, sourcesIndex, sourceLine, sourceColumn],
       );
+    };
+
+    applySourceMap = (
+      map: GenMapping,
+      consumer: TraceMap,
+      rawSourceFile?: string,
+      sourceMapPath?: string,
+    ) => {
+      let sourceFile = rawSourceFile;
+
+      if (sourceFile == null) {
+        if (consumer.file == null) {
+          throw new Error(
+            'applySourceMap requires either an explicit source file, ' +
+              'or the source map\'s "file" property. Both were omitted.',
+          );
+        }
+        sourceFile = consumer.file;
+      }
+
+      const sourceRoot = map.sourceRoot;
+
+      // Make "sourceFile" relative if an absolute Url is passed.
+      if (sourceRoot != null) {
+        sourceFile = relative(sourceRoot, sourceFile);
+      }
+
+      const sourceIndex = get(map._sources, sourceFile);
+
+      // If the applied source map replaces a source entirely
+      // it's better to start with a fresh set of source, sourceContent and names
+      const newSources = new SetArray();
+      const newSourceContents: (string | null)[] = [];
+      const newNames = new SetArray();
+
+      for (const line of map._mappings) {
+        for (const seg of line) {
+          if (seg.length === 1) continue;
+
+          if (seg[1] !== sourceIndex) {
+            // This isn't the file we want to remap; keep the original mapping
+            const initialIndex = seg[1];
+            seg[1] = put(newSources, map._sources.array[initialIndex]);
+            newSourceContents[seg[1]] = map._sourcesContent[initialIndex];
+            if (seg.length === 5) {
+              seg[4] = put(newNames, map._names.array[seg[4]]);
+            }
+            continue;
+          }
+
+          const traced = traceSegment(consumer, seg[2], seg[3]);
+          if (traced == null) {
+            // Could not find a mapping; keep the original mapping
+            const initialIndex = seg[1];
+            seg[1] = put(newSources, map._sources.array[initialIndex]);
+            newSourceContents[seg[1]] = map._sourcesContent[initialIndex];
+            if (seg.length === 5) {
+              seg[4] = put(newNames, map._names.array[seg[4]]);
+            }
+            continue;
+          }
+
+          let source = consumer.sources[traced[1] as number] as string;
+          if (sourceMapPath != null) {
+            source = join(sourceMapPath, source);
+          }
+          if (sourceRoot != null) {
+            source = relative(sourceRoot, source);
+          }
+
+          const newSourceIndex = put(newSources, source);
+          newSourceContents[newSourceIndex] = consumer.sourcesContent
+            ? consumer.sourcesContent[traced[1] as number]
+            : null;
+
+          seg[1] = newSourceIndex;
+          seg[2] = traced[2] as number;
+          seg[3] = traced[3] as number;
+
+          if (traced.length === 5) {
+            // Add the name mapping if found
+            seg[4] = put(newNames, consumer.names[traced[4]]);
+          } else if (seg.length == 5) {
+            // restore the previous name mapping if found
+            seg[4] = put(newNames, map._names.array[seg[4]]);
+          }
+        }
+      }
+
+      map._sources = newSources;
+      map._sourcesContent = newSourceContents;
+      map._names = newNames;
     };
   }
 }
