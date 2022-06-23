@@ -378,6 +378,11 @@ export class GenMapping {
 
       const sourceIndex = get(map._sources, sourceFile);
 
+      if (sourceIndex === undefined) {
+        // This source file isn't in this map, nothing to merge here
+        return;
+      }
+
       // If the applied source map replaces a source entirely
       // it's better to start with a fresh set of source, sourceContent and names
       const newSources = new SetArray();
