@@ -230,7 +230,11 @@ export class GenMapping {
 
     setSourceContent = (map, source, content) => {
       const { _sources: sources, _sourcesContent: sourcesContent } = map;
-      sourcesContent[put(sources, source)] = content;
+
+      const sourceIndex = get(sources, source);
+      if (sourceIndex !== undefined) {
+        sourcesContent[sourceIndex] = content;
+      }
     };
 
     toDecodedMap = (map) => {
