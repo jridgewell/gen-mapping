@@ -10,7 +10,8 @@ import {
   NAMES_INDEX,
 } from './sourcemap-segment';
 
-import { join, relative } from './util';
+import relativeUri from '@jridgewell/resolve-uri/relative';
+import resolveUri from '@jridgewell/resolve-uri';
 
 import type { SourceMapInput } from '@jridgewell/trace-mapping';
 import type { SourceMapSegment } from './sourcemap-segment';
@@ -358,97 +359,107 @@ export class GenMapping {
     applySourceMap = (
       map: GenMapping,
       consumer: TraceMap,
-      rawSourceFile?: string,
-      sourceMapPath?: string,
+      rawSourceFile?: string | null,
+      sourceMapPath?: string | null,
     ) => {
-      let sourceFile = rawSourceFile;
-
+      let sourceFile = rawSourceFile ?? consumer.file;
       if (sourceFile == null) {
-        if (consumer.file == null) {
-          throw new Error(
-            'applySourceMap requires either an explicit source file, ' +
-              'or the source map\'s "file" property. Both were omitted.',
-          );
-        }
-        sourceFile = consumer.file;
+        throw new Error(
+          'applySourceMap requires either an explicit source file, ' +
+            'or the source map\'s "file" property. Both were omitted.',
+        );
       }
 
-      const sourceRoot = map.sourceRoot;
+      if (!sourceMapPath) sourceMapPath = '';
+      else if (!sourceMapPath.endsWith('/')) sourceMapPath += '/';
 
-      // Make "sourceFile" relative if an absolute Url is passed.
-      if (sourceRoot != null) {
-        sourceFile = relative(sourceRoot, sourceFile);
+      const { _mappings: mappings, _sourcesContent: sourcesContent, sourceRoot } = map;
+      const sources = map._sources.array;
+      const names = map._names.array;
+
+      const {
+        sources: consumerSources,
+        sourcesContent: consumerSourcesContent,
+        names: consumerNames,
+      } = consumer;
+
+      let sourceIndex = get(map._sources, sourceFile);
+      if (sourceIndex === undefined && sourceRoot) {
+        // If we couldn't fine the source file and there's a sourceRoot, the sourceFile may have
+        // been joined with the root already. Try again after making the file relative to the root.
+        sourceFile = relativeUri(sourceRoot, sourceFile);
+        sourceIndex = get(map._sources, sourceFile);
       }
 
-      const sourceIndex = get(map._sources, sourceFile);
+      // If we still can't find the source file, then there's no way we could remap the file with
+      // the new consumer map.
+      if (sourceIndex === undefined) return;
 
-      if (sourceIndex === undefined) {
-        // This source file isn't in this map, nothing to merge here
-        return;
-      }
-
-      // If the applied source map replaces a source entirely
-      // it's better to start with a fresh set of source, sourceContent and names
+      // The source file and several names could be replaced by the remapped consumer map. To avoid
+      // leaving dead entires, we regenerate the both (and the paired sourcesContent).
       const newSources = new SetArray();
-      const newSourceContents: (string | null)[] = [];
+      const newSourcesContent: (string | null)[] = [];
       const newNames = new SetArray();
 
-      for (const line of map._mappings) {
-        for (const seg of line) {
+      for (let i = 0; i < mappings.length; i++) {
+        const line = mappings[i];
+
+        for (let j = 0; j < line.length; j++) {
+          const seg = line[j];
           if (seg.length === 1) continue;
 
-          if (seg[1] !== sourceIndex) {
-            // This isn't the file we want to remap; keep the original mapping
-            const initialIndex = seg[1];
-            seg[1] = put(newSources, map._sources.array[initialIndex]);
-            newSourceContents[seg[1]] = map._sourcesContent[initialIndex];
-            if (seg.length === 5) {
-              seg[4] = put(newNames, map._names.array[seg[4]]);
-            }
-            continue;
+          let traced = null;
+          if (seg[1] === sourceIndex) {
+            traced = traceSegment(consumer, seg[2], seg[3]);
           }
 
-          const traced = traceSegment(consumer, seg[2], seg[3]);
           if (traced == null) {
-            // Could not find a mapping; keep the original mapping
+            // Either this segment is mapping a different source file, or we couldn't traced the
+            // original mapping in the consumer. Either way, we'll keep the original.
             const initialIndex = seg[1];
-            seg[1] = put(newSources, map._sources.array[initialIndex]);
-            newSourceContents[seg[1]] = map._sourcesContent[initialIndex];
-            if (seg.length === 5) {
-              seg[4] = put(newNames, map._names.array[seg[4]]);
-            }
+            const newSourceIndex = (seg[1] = put(newSources, sources[initialIndex]));
+            newSourcesContent[newSourceIndex] = sourcesContent[initialIndex];
+            if (seg.length === 5) seg[4] = put(newNames, names[seg[4]]);
             continue;
           }
 
-          let source = consumer.sources[traced[1] as number] as string;
+          if (traced.length === 1) {
+            // If the traced mapping points to a sourceless segment, we need to truncate the
+            // original to also be sourceless.
+            (seg as number[]).length = 1;
+            continue;
+          }
+
+          let source = consumerSources[traced[1]] || '';
           if (sourceMapPath != null) {
-            source = join(sourceMapPath, source);
+            source = resolveUri(source, sourceMapPath);
           }
           if (sourceRoot != null) {
-            source = relative(sourceRoot, source);
+            source = relativeUri(sourceRoot, source);
           }
 
           const newSourceIndex = put(newSources, source);
-          newSourceContents[newSourceIndex] = consumer.sourcesContent
-            ? consumer.sourcesContent[traced[1] as number]
+          newSourcesContent[newSourceIndex] = consumerSourcesContent
+            ? consumerSourcesContent[traced[1]]
             : null;
 
           seg[1] = newSourceIndex;
-          seg[2] = traced[2] as number;
-          seg[3] = traced[3] as number;
+          seg[2] = traced[2];
+          seg[3] = traced[3];
 
+          // If the traced segment has a name, prioritize that. If not, we'll take the original's
+          // name. We can't shorten this into a ternary because we may not have a name at all, and
+          // we cannot set index 4 if there is no name.
           if (traced.length === 5) {
-            // Add the name mapping if found
-            seg[4] = put(newNames, consumer.names[traced[4]]);
+            seg[4] = put(newNames, consumerNames[traced[4]]);
           } else if (seg.length == 5) {
-            // restore the previous name mapping if found
-            seg[4] = put(newNames, map._names.array[seg[4]]);
+            seg[4] = put(newNames, names[seg[4]]);
           }
         }
       }
 
       map._sources = newSources;
-      map._sourcesContent = newSourceContents;
+      map._sourcesContent = newSourcesContent;
       map._names = newNames;
     };
   }

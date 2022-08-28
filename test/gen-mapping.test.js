@@ -854,8 +854,6 @@ describe('GenMapping', () => {
   });
 });
 
-
-
 describe('applySourceMap', () => {
   it('test applySourceMap basic', () => {
     var mapStep1 = /** @type {import('@jridgewell/trace-mapping').EncodedSourceMap} */ {
@@ -985,7 +983,11 @@ describe('applySourceMap', () => {
       });
       setSourceContent(bundleMapSource, 'http://www.example.com/baz.coffee', 'baz coffee');
 
-      const bundleMap = new TraceMap(toEncodedMap(bundleMapSource));
+      const bundleMap = new TraceMap(
+        /** @type {import('@jridgewell/trace-mapping').EncodedSourceMap} */ (
+          toEncodedMap(bundleMapSource)
+        )
+      );
 
       const minifiedMapSource = new GenMapping({
         file: 'bundle.min.js',
@@ -1006,12 +1008,16 @@ describe('applySourceMap', () => {
         original: { line: 23, column: 23 },
         source: 'temp/bundle.js',
       });
-      const minifiedMap = new TraceMap(toEncodedMap(minifiedMapSource));
+      const minifiedMap = new TraceMap(
+        /** @type {import('@jridgewell/trace-mapping').EncodedSourceMap} */ (
+          toEncodedMap(minifiedMapSource)
+        )
+      );
 
       /**
        *
        * @param {[string, string, string]} sources
-       * @returns
+       * @returns {import('..').EncodedSourceMap}
        */
       var expectedMap = function (sources) {
         var map = new GenMapping({
@@ -1042,7 +1048,7 @@ describe('applySourceMap', () => {
       /**
        *
        * @param {string} aSourceMapPath
-       * @returns {import('@jridgewell/trace-mapping').EncodedSourceMap}
+       * @returns {import('..').EncodedSourceMap}
        */
       var actualMap = function (aSourceMapPath) {
         var map = fromMap(minifiedMap);

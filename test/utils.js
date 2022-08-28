@@ -1,10 +1,10 @@
 /**
  *
  * @param {*} assert
- * @param {import('@jridgewell/trace-mapping').EncodedSourceMap} actualMap
- * @param {import('@jridgewell/trace-mapping').EncodedSourceMap} expectedMap
+ * @param {import('..').EncodedSourceMap} actualMap
+ * @param {import('..').EncodedSourceMap} expectedMap
  */
- function assertEqualMaps(assert, actualMap, expectedMap) {
+function assertEqualMaps(assert, actualMap, expectedMap) {
   assert.equal(actualMap.version, expectedMap.version, 'version mismatch');
   assert.equal(actualMap.file, expectedMap.file, 'file mismatch');
   assert.deepEqual(actualMap.names, expectedMap.names, 'names mismatch');
@@ -35,4 +35,4 @@
   }
 }
 
-module.exports.assertEqualMaps = assertEqualMaps;
+exports.assertEqualMaps = assertEqualMaps;
