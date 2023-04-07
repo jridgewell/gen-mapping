@@ -1,6 +1,6 @@
-import { SetArray, put } from '@jridgewell/set-array';
+import { SetArray, put, get } from '@jridgewell/set-array';
 import { encode } from '@jridgewell/sourcemap-codec';
-import { TraceMap, decodedMappings } from '@jridgewell/trace-mapping';
+import { TraceMap, decodedMappings, traceSegment } from '@jridgewell/trace-mapping';
 
 import {
   COLUMN,
@@ -9,6 +9,9 @@ import {
   SOURCE_COLUMN,
   NAMES_INDEX,
 } from './sourcemap-segment';
+
+import relativeUri from '@jridgewell/resolve-uri/relative';
+import resolveUri from '@jridgewell/resolve-uri';
 
 import type { SourceMapInput } from '@jridgewell/trace-mapping';
 import type { SourceMapSegment } from './sourcemap-segment';
@@ -139,6 +142,18 @@ export let fromMap: (input: SourceMapInput) => GenMapping;
  */
 export let allMappings: (map: GenMapping) => Mapping[];
 
+/**
+ * Applies the mappings of a sub-source-map for a specific source file to the
+ * source map being generated. Each mapping to the supplied source file is
+ * rewritten using the supplied source map.
+ */
+export let applySourceMap: (
+  map: GenMapping,
+  sourceMapConsumer: TraceMap,
+  sourceFile?: string,
+  sourceMapPath?: string,
+) => void;
+
 // This split declaration is only so that terser can elminiate the static initialization block.
 let addSegmentInternal: <S extends string | null | undefined>(
   skipable: boolean,
@@ -216,7 +231,11 @@ export class GenMapping {
 
     setSourceContent = (map, source, content) => {
       const { _sources: sources, _sourcesContent: sourcesContent } = map;
-      sourcesContent[put(sources, source)] = content;
+
+      const sourceIndex = get(sources, source);
+      if (sourceIndex !== undefined) {
+        sourcesContent[sourceIndex] = content;
+      }
     };
 
     toDecodedMap = (map) => {
@@ -335,6 +354,113 @@ export class GenMapping {
           ? [genColumn, sourcesIndex, sourceLine, sourceColumn, namesIndex]
           : [genColumn, sourcesIndex, sourceLine, sourceColumn],
       );
+    };
+
+    applySourceMap = (
+      map: GenMapping,
+      consumer: TraceMap,
+      rawSourceFile?: string | null,
+      sourceMapPath?: string | null,
+    ) => {
+      let sourceFile = rawSourceFile ?? consumer.file;
+      if (sourceFile == null) {
+        throw new Error(
+          'applySourceMap requires either an explicit source file, ' +
+            'or the source map\'s "file" property. Both were omitted.',
+        );
+      }
+
+      if (!sourceMapPath) sourceMapPath = '';
+      else if (!sourceMapPath.endsWith('/')) sourceMapPath += '/';
+
+      const { _mappings: mappings, _sourcesContent: sourcesContent, sourceRoot } = map;
+      const sources = map._sources.array;
+      const names = map._names.array;
+
+      const {
+        sources: consumerSources,
+        sourcesContent: consumerSourcesContent,
+        names: consumerNames,
+      } = consumer;
+
+      let sourceIndex = get(map._sources, sourceFile);
+      if (sourceIndex === undefined && sourceRoot) {
+        // If we couldn't fine the source file and there's a sourceRoot, the sourceFile may have
+        // been joined with the root already. Try again after making the file relative to the root.
+        sourceFile = relativeUri(sourceRoot, sourceFile);
+        sourceIndex = get(map._sources, sourceFile);
+      }
+
+      // If we still can't find the source file, then there's no way we could remap the file with
+      // the new consumer map.
+      if (sourceIndex === undefined) return;
+
+      // The source file and several names could be replaced by the remapped consumer map. To avoid
+      // leaving dead entires, we regenerate the both (and the paired sourcesContent).
+      const newSources = new SetArray();
+      const newSourcesContent: (string | null)[] = [];
+      const newNames = new SetArray();
+
+      for (let i = 0; i < mappings.length; i++) {
+        const line = mappings[i];
+
+        for (let j = 0; j < line.length; j++) {
+          const seg = line[j];
+          if (seg.length === 1) continue;
+
+          let traced = null;
+          if (seg[1] === sourceIndex) {
+            traced = traceSegment(consumer, seg[2], seg[3]);
+          }
+
+          if (traced == null) {
+            // Either this segment is mapping a different source file, or we couldn't traced the
+            // original mapping in the consumer. Either way, we'll keep the original.
+            const initialIndex = seg[1];
+            const newSourceIndex = (seg[1] = put(newSources, sources[initialIndex]));
+            newSourcesContent[newSourceIndex] = sourcesContent[initialIndex];
+            if (seg.length === 5) seg[4] = put(newNames, names[seg[4]]);
+            continue;
+          }
+
+          if (traced.length === 1) {
+            // If the traced mapping points to a sourceless segment, we need to truncate the
+            // original to also be sourceless.
+            (seg as number[]).length = 1;
+            continue;
+          }
+
+          let source = consumerSources[traced[1]] || '';
+          if (sourceMapPath != null) {
+            source = resolveUri(source, sourceMapPath);
+          }
+          if (sourceRoot != null) {
+            source = relativeUri(sourceRoot, source);
+          }
+
+          const newSourceIndex = put(newSources, source);
+          newSourcesContent[newSourceIndex] = consumerSourcesContent
+            ? consumerSourcesContent[traced[1]]
+            : null;
+
+          seg[1] = newSourceIndex;
+          seg[2] = traced[2];
+          seg[3] = traced[3];
+
+          // If the traced segment has a name, prioritize that. If not, we'll take the original's
+          // name. We can't shorten this into a ternary because we may not have a name at all, and
+          // we cannot set index 4 if there is no name.
+          if (traced.length === 5) {
+            seg[4] = put(newNames, consumerNames[traced[4]]);
+          } else if (seg.length == 5) {
+            seg[4] = put(newNames, names[seg[4]]);
+          }
+        }
+      }
+
+      map._sources = newSources;
+      map._sourcesContent = newSourcesContent;
+      map._names = newNames;
     };
   }
 }
