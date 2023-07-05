@@ -1,10 +1,10 @@
 import type { SourceMapSegment } from './sourcemap-segment';
 
 export interface SourceMapV3 {
-  file?: string | null;
+  file?: string;
   names: readonly string[];
   sourceRoot?: string;
-  sources: readonly (string | null)[];
+  sources: readonly string[];
   sourcesContent?: readonly (string | null)[];
   version: 3;
 }
