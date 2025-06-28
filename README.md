@@ -1,3 +1,9 @@
+# Development moved to [monorepo](https://github.com/jridgewell/sourcemaps)
+
+See https://github.com/jridgewell/sourcemaps/tree/main/packages/gen-mapping for latest code.
+
+- - -
+
 # @jridgewell/gen-mapping
 
 > Generate source maps
